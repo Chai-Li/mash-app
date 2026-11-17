@@ -488,6 +488,9 @@ fn server(
 }
 
 fn read_request(stream: &mut TcpStream) -> (String, serde_json::Value) {
+    // Windows accepts inherit the listener's nonblocking mode. The fixture
+    // polls accept() for shutdown, but request reads must wait for HTTP bytes.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
@@ -517,6 +520,28 @@ fn read_request(stream: &mut TcpStream) -> (String, serde_json::Value) {
         serde_json::from_slice(&buffer[header_end..]).unwrap()
     };
     (headers.lines().next().unwrap().into(), body)
+}
+
+#[test]
+fn fixture_reads_delayed_request_from_nonblocking_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    // Windows can inherit this mode from a nonblocking listener. Set it
+    // explicitly so the same regression is covered on every test platform.
+    stream.set_nonblocking(true).unwrap();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        client
+            .write_all(b"POST /capture/live/record HTTP/1.1\r\nContent-Length: 10\r\n\r\n")
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        client.write_all(br#"{"id":129}"#).unwrap();
+    });
+    let request = read_request(&mut stream);
+    sender.join().unwrap();
+    assert_eq!(request.0, "POST /capture/live/record HTTP/1.1");
+    assert_eq!(request.1, serde_json::json!({"id": 129}));
 }
 
 fn captured(id: u64, uid: &str, body: Option<serde_json::Value>) -> serde_json::Value {
