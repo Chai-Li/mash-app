@@ -93,6 +93,7 @@ const craftEssences: CraftEssence[] = [
 ];
 
 let selectedAdbSerial: string | null = null;
+const connectedAdbSerials = new Set(["127.0.0.1:5555"]);
 let deviceResolutionOverridden = true;
 
 function deviceResolutionStatus(): DeviceResolutionStatus {
@@ -617,21 +618,24 @@ async function invokeLegacyDevMock<T>(cmd: string, args: InvokeArgs = {}): Promi
     case "get_selected_adb_device":
       return selectedAdbSerial as T;
     case "refresh_adb_devices_with_previews":
-      if (selectedAdbSerial == null) selectedAdbSerial = "127.0.0.1:5555";
-      return [
-        {
-          serial: "127.0.0.1:5555",
-          description: "product:bluestacks model:dev",
-          previewPath: "/tmp/mash-dev-adb-preview.png",
-          selected: selectedAdbSerial === "127.0.0.1:5555",
-        },
-      ] as T;
+      if (selectedAdbSerial == null && connectedAdbSerials.size === 1) selectedAdbSerial = "127.0.0.1:5555";
+      return Array.from(connectedAdbSerials, (serial) => ({
+        serial,
+        description: "model:dev",
+        previewPath: "/tmp/mash-dev-adb-preview.png",
+        selected: selectedAdbSerial === serial,
+        selectedMumu: false,
+      })) as T;
     case "select_adb_device":
       selectedAdbSerial = String(args.serial);
       return { connected: true, deviceName: selectedAdbSerial } as T;
     case "connect_adb_port":
-      selectedAdbSerial = `127.0.0.1:${Number(args.port)}`;
-      return selectedAdbSerial as T;
+    case "connect_adb_endpoint": {
+      const host = cmd === "connect_adb_port" ? "127.0.0.1" : String(args.host).trim();
+      const serial = `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${String(args.port).trim()}`;
+      connectedAdbSerials.add(serial);
+      return serial as T;
+    }
     case "reset_bluestacks_adb_connection":
       return {
         ok: true,

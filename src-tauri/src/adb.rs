@@ -261,6 +261,11 @@ impl Adb {
             if devices.iter().any(|device| device.serial == serial) {
                 return Ok(Some(serial.to_string()));
             }
+            // Keep a saved network endpoint during temporary Wi-Fi outages.
+            // Falling back here would persist another device and stop retries.
+            if Self::is_tcp_serial(serial) {
+                return Ok(None);
+            }
         }
         if devices
             .iter()
@@ -275,17 +280,6 @@ impl Adb {
             Ok(None)
         } else {
             Err("检测到多个 ADB 设备，请先选择要使用的设备".into())
-        }
-    }
-
-    pub(crate) fn refresh_connection(adb_path: &std::path::Path) {
-        for args in [
-            ["disconnect", BLUESTACKS_SERIAL].as_slice(),
-            ["kill-server"].as_slice(),
-            ["start-server"].as_slice(),
-            ["connect", BLUESTACKS_SERIAL].as_slice(),
-        ] {
-            adb_command(adb_path).args(args).output().ok();
         }
     }
 
@@ -747,12 +741,32 @@ mod tests {
         let devices = Adb::ready_devices_from_output(
             "List of devices attached\n\
              emulator-5554\tdevice\n\
+             192.168.1.50:5555\tdevice\n\
              127.0.0.1:5555\tdevice\n",
         );
         assert_eq!(
             Adb::select_ready_serial(&devices, Some("127.0.0.1:5555")).unwrap(),
             Some("127.0.0.1:5555".into())
         );
+        assert_eq!(
+            Adb::select_ready_serial(&devices, Some("192.168.1.50:5555")).unwrap(),
+            Some("192.168.1.50:5555".into())
+        );
+    }
+
+    #[test]
+    fn missing_saved_network_device_does_not_switch_to_another_device() {
+        for output in [
+            "List of devices attached\n127.0.0.1:5555\tdevice\n",
+            "List of devices attached\nemulator-5554\tdevice\n",
+            "List of devices attached\n192.168.1.50:5555\toffline\n127.0.0.1:5555\tdevice\n",
+        ] {
+            let devices = Adb::ready_devices_from_output(output);
+            assert_eq!(
+                Adb::select_ready_serial(&devices, Some("192.168.1.50:5555")).unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

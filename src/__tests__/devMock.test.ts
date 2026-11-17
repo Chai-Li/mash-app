@@ -3,6 +3,19 @@ import { invokeDevMock } from "../devMock";
 import type { Project, ProjectCatalog } from "../types/project";
 import type { CaptureHistoryState, PacketCaptureWorkspace } from "../types/packetCapture";
 
+it("keeps a newly connected LAN device available for explicit selection in browser previews", async () => {
+  await invokeDevMock("refresh_adb_devices_with_previews");
+  const selected = await invokeDevMock("get_selected_adb_device");
+  const serial = await invokeDevMock<string>("connect_adb_endpoint", { host: "192.168.1.100", port: "5555" });
+  expect(serial).toBe("192.168.1.100:5555");
+  expect(await invokeDevMock("get_selected_adb_device")).toBe(selected);
+  expect(await invokeDevMock("refresh_adb_devices_with_previews")).toEqual(expect.arrayContaining([
+    expect.objectContaining({ serial, selected: false }),
+  ]));
+  await invokeDevMock("select_adb_device", { serial });
+  expect(await invokeDevMock("check_adb")).toEqual({ connected: true, deviceName: serial });
+});
+
 it("requires the desktop runtime for packet capture device operations", async () => {
   for (const command of ["install_capture_certificate", "configure_packet_capture", "setup_packet_capture", "start_packet_capture", "stop_packet_capture"]) {
     await expect(invokeDevMock(command)).rejects.toThrow("请在 Mash 桌面端连接设备后执行此操作");

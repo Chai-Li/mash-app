@@ -19,6 +19,8 @@
 2. 在 Mash 中连接设备，按提示安装 CV 运行时和资源。
 3. 配置队伍与自动化任务，开始运行。
 
+本地修改版支持在“选择设备 → 手动添加”中填写局域网 IP 与 ADB 端口，使用与排查见[局域网 ADB 连接](docs/lan-adb.md)。
+
 ## 本地开发
 
 需要 Node.js 22、Rust stable、`package.json` 指定的 pnpm，以及当前平台的 Tauri 构建依赖。环境配置与测试方式见[贡献指南](CONTRIBUTING.md)。

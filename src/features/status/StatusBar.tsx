@@ -643,6 +643,7 @@ export function StatusBar({
   const [devicePreviews, setDevicePreviews] = useState<AdbDevicePreview[]>([]);
   const [selectingSerial, setSelectingSerial] = useState<string | null>(null);
   const [manualPortOpen, setManualPortOpen] = useState(false);
+  const [manualHost, setManualHost] = useState("127.0.0.1");
   const [manualPort, setManualPort] = useState("5555");
   const [manualPortBusy, setManualPortBusy] = useState(false);
   const [manualPortError, setManualPortError] = useState<string | null>(null);
@@ -823,21 +824,17 @@ export function StatusBar({
   }, []);
 
   const handleManualAddDevice = useCallback(() => {
-    const port = Number.parseInt(manualPort.trim(), 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setManualPortError("请输入 1-65535 之间的端口号");
-      return;
-    }
+    if (manualPortBusy) return;
     setManualPortBusy(true);
     setManualPortError(null);
-    invoke<string>("connect_adb_port", { port })
+    invoke<string>("connect_adb_endpoint", { host: manualHost, port: manualPort })
       .then(() => {
         setManualPortOpen(false);
         refreshDevicePreviews(false);
       })
       .catch((err) => setManualPortError(String(err)))
       .finally(() => setManualPortBusy(false));
-  }, [manualPort, refreshDevicePreviews]);
+  }, [manualHost, manualPort, manualPortBusy, refreshDevicePreviews]);
 
   const handleResetAdb = useCallback(() => {
     setResettingAdb(true);
@@ -1001,42 +998,61 @@ export function StatusBar({
         </Dialog.Content>
       </Dialog.Root>
 
-      <Dialog.Root open={manualPortOpen} onOpenChange={setManualPortOpen}>
-        <Dialog.Content maxWidth="360px" className="adb-manual-port-dialog">
+      <Dialog.Root open={manualPortOpen} onOpenChange={(open) => {
+        if (!manualPortBusy) setManualPortOpen(open);
+      }}>
+        <Dialog.Content maxWidth="420px">
           <Dialog.Title>手动添加 ADB 设备</Dialog.Title>
           <Dialog.Description size="2" color="gray">
-            输入 127.0.0.1 的 ADB 端口号。
+            输入本机或局域网设备的 IP / 主机名和 ADB 端口。
           </Dialog.Description>
-          <Flex align="center" gap="2" mt="3">
-            <Text size="2" color="gray">127.0.0.1:</Text>
-            <TextField.Root
-              size="2"
-              value={manualPort}
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder="5555"
-              disabled={manualPortBusy}
-              autoFocus
-              onChange={(event) => setManualPort(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") handleManualAddDevice();
-              }}
-            />
-          </Flex>
-          {manualPortError && (
-            <Text size="1" color="red" as="p" mt="2">{manualPortError}</Text>
-          )}
-          <Flex justify="end" gap="2" mt="4">
-            <Dialog.Close>
-              <Button size="2" variant="soft" color="gray" disabled={manualPortBusy}>
-                取消
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            handleManualAddDevice();
+          }}>
+            <Flex direction="column" gap="3" mt="3">
+              <Text as="label" size="2">
+                IP / 主机名
+                <TextField.Root
+                  mt="1"
+                  size="2"
+                  aria-label="ADB 主机 / IP"
+                  value={manualHost}
+                  placeholder="例如：192.168.1.100"
+                  disabled={manualPortBusy}
+                  autoFocus
+                  onChange={(event) => setManualHost(event.target.value)}
+                />
+              </Text>
+              <Text as="label" size="2">
+                ADB 端口
+                <TextField.Root
+                  mt="1"
+                  size="2"
+                  aria-label="ADB 端口"
+                  value={manualPort}
+                  inputMode="numeric"
+                  placeholder="5555"
+                  disabled={manualPortBusy}
+                  onChange={(event) => setManualPort(event.target.value)}
+                />
+              </Text>
+            </Flex>
+            {manualPortError && (
+              <Text role="alert" size="1" color="red" as="p" mt="2">{manualPortError}</Text>
+            )}
+            <Flex justify="end" gap="2" mt="4">
+              <Dialog.Close>
+                <Button type="button" size="2" variant="soft" color="gray" disabled={manualPortBusy}>
+                  取消
+                </Button>
+              </Dialog.Close>
+              <Button type="submit" size="2" disabled={manualPortBusy}>
+                {manualPortBusy ? <Spinner size="1" /> : null}
+                {manualPortBusy ? "正在连接…" : "添加"}
               </Button>
-            </Dialog.Close>
-            <Button size="2" disabled={manualPortBusy} onClick={handleManualAddDevice}>
-              {manualPortBusy ? <Spinner size="1" /> : null}
-              添加
-            </Button>
-          </Flex>
+            </Flex>
+          </form>
         </Dialog.Content>
       </Dialog.Root>
 

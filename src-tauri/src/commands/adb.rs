@@ -19,6 +19,7 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+mod network;
 pub(crate) mod resolution;
 
 #[derive(serde::Serialize, Clone)]
@@ -231,29 +232,21 @@ pub(crate) fn select_adb_device(
 }
 
 #[tauri::command]
-pub(crate) fn connect_adb_port(app: tauri::AppHandle, port: u16) -> Result<String, String> {
-    if port == 0 {
-        return Err("端口号无效".into());
-    }
-    let serial = format!("127.0.0.1:{port}");
+pub(crate) async fn connect_adb_port(app: tauri::AppHandle, port: u16) -> Result<String, String> {
+    connect_adb_endpoint(app, "127.0.0.1".into(), port.to_string()).await
+}
+
+#[tauri::command]
+pub(crate) async fn connect_adb_endpoint(
+    app: tauri::AppHandle,
+    host: String,
+    port: String,
+) -> Result<String, String> {
+    let serial = network::endpoint(&host, &port)?;
     let adb_path = adb::resolve_adb_path(&app);
-    let output = adb::adb_command(&adb_path)
-        .args(["connect", serial.as_str()])
-        .output()
-        .map_err(|e| format!("failed to run adb connect: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("adb connect {serial} 失败")
-        } else {
-            format!("adb connect {serial} 失败: {stderr}")
-        });
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.contains("failed") || stdout.contains("unable") || stdout.contains("refused") {
-        return Err(format!("adb connect {serial} 失败: {stdout}"));
-    }
-    Ok(serial)
+    tauri::async_runtime::spawn_blocking(move || network::connect(&adb_path, &serial))
+        .await
+        .map_err(|e| format!("ADB 连接任务失败: {e}"))?
 }
 
 #[tauri::command]
@@ -271,16 +264,10 @@ pub(crate) async fn refresh_adb_devices_with_previews(
     let previews = tauri::async_runtime::spawn_blocking(move || {
         let adb_path = adb::resolve_adb_path(&app_for_task);
         if should_refresh {
-            adb::Adb::refresh_connection(&adb_path);
+            network::refresh_connections(&adb_path);
         }
-        adb::Adb::connect_preferred_serial(&adb_path, selected_serial.as_deref());
         clear_device_previews(&app_for_task);
-        let output = adb::adb_command(&adb_path)
-            .args(["devices", "-l"])
-            .output()
-            .map_err(|e| format!("failed to run adb: {e}"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let devices = adb::Adb::ready_devices_from_output(&stdout);
+        let devices = network::scan_devices(&adb_path, selected_serial.as_deref())?;
         let matching_mumu_serials: HashSet<String> = selected_mumu_root
             .as_deref()
             .map(|root| {
@@ -760,6 +747,30 @@ mod tests {
             .unwrap();
         assert!(!status.connected);
         assert!(status.device_name.is_none());
+    }
+
+    #[test]
+    fn failed_lan_reconnect_keeps_selection_instead_of_using_local_emulator() {
+        let calls = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let calls_for_task = calls.clone();
+        let status = tauri::async_runtime::block_on(poll_adb_status(
+            Some("192.168.1.50:5555".into()),
+            move |args| {
+                calls_for_task.lock().unwrap().push(args.join(" "));
+                Some(if args[0] == "connect" {
+                    "failed to connect".into()
+                } else {
+                    "List of devices attached\n127.0.0.1:5555\tdevice\n".into()
+                })
+            },
+        ))
+        .unwrap();
+        assert!(!status.connected);
+        assert!(status.device_name.is_none());
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["devices -l", "connect 192.168.1.50:5555", "devices -l",]
+        );
     }
 
     #[test]

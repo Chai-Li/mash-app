@@ -930,12 +930,26 @@ describe("StatusBar", () => {
     });
   });
 
-  it("connects a manually entered adb port and rereads the current device list", async () => {
+  it.each([
+    { host: "127.0.0.1", port: "5565" },
+    { host: "192.168.1.100", port: "5555" },
+    { host: "android.local", port: "37099" },
+    { host: "fd00::1234", port: "5555" },
+  ])("connects to $host:$port and rereads the current device list", async ({ host, port }) => {
+    let connected = false;
+    let scans = 0;
+    const serial = `${host}:${port}`;
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === "get_server") return "JP";
       if (cmd === "check_adb") return { connected: false, deviceName: null };
-      if (cmd === "connect_adb_port") return "127.0.0.1:5565";
-      if (cmd === "refresh_adb_devices_with_previews") return [];
+      if (cmd === "connect_adb_endpoint") {
+        connected = true;
+        return serial;
+      }
+      if (cmd === "refresh_adb_devices_with_previews") {
+        scans += 1;
+        return connected ? [{ serial, description: "model:Pixel", previewPath: "/tmp/pixel.png", selected: false, selectedMumu: false }] : [];
+      }
       return null;
     });
     const user = userEvent.setup();
@@ -947,15 +961,71 @@ describe("StatusBar", () => {
     await user.click(screen.getByRole("button", { name: "手动添加" }));
 
     expect(await screen.findByRole("dialog", { name: "手动添加 ADB 设备" })).toBeInTheDocument();
-    const input = screen.getByPlaceholderText("5555");
-    await user.clear(input);
-    await user.type(input, "5565");
+    const hostInput = screen.getByRole("textbox", { name: "ADB 主机 / IP" });
+    const portInput = screen.getByRole("textbox", { name: "ADB 端口" });
+    expect(hostInput).toHaveValue("127.0.0.1");
+    expect(portInput).toHaveValue("5555");
+    await user.clear(hostInput);
+    await user.type(hostInput, host);
+    await user.clear(portInput);
+    await user.type(portInput, port);
     await user.click(screen.getByRole("button", { name: "添加" }));
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("connect_adb_port", { port: 5565 });
+      expect(invoke).toHaveBeenCalledWith("connect_adb_endpoint", { host, port });
     });
+    expect(await screen.findByText(serial)).toBeInTheDocument();
+    expect(scans).toBe(2);
     expect(invoke).toHaveBeenCalledWith("refresh_adb_devices_with_previews", { refresh: false });
+    expect(invoke).not.toHaveBeenCalledWith("refresh_adb_devices_with_previews", { refresh: true });
+    expect(invoke).not.toHaveBeenCalledWith("select_adb_device", expect.anything());
+    expect(screen.queryByRole("dialog", { name: "手动添加 ADB 设备" })).not.toBeInTheDocument();
+  });
+
+  it("shows backend connection errors and lets the user correct and retry the endpoint", async () => {
+    let resolveConnection: (serial: string) => void = () => {};
+    let attempts = 0;
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "get_server") return "JP";
+      if (cmd === "check_adb") return { connected: false, deviceName: null };
+      if (cmd === "refresh_adb_devices_with_previews") return [];
+      if (cmd === "connect_adb_endpoint") {
+        attempts += 1;
+        if (attempts === 1) throw "请输入 1-65535 之间的端口号";
+        return new Promise<string>((resolve) => { resolveConnection = resolve; });
+      }
+      return null;
+    });
+    const user = userEvent.setup();
+    renderWithTheme(<StatusBar />);
+    await user.click(screen.getByRole("button", { name: /游戏未连接/ }));
+    await user.click(screen.getByRole("button", { name: "选择设备" }));
+    await screen.findByText("未检测到可用 ADB 设备");
+    await user.click(screen.getByRole("button", { name: "手动添加" }));
+    const hostInput = screen.getByRole("textbox", { name: "ADB 主机 / IP" });
+    const portInput = screen.getByRole("textbox", { name: "ADB 端口" });
+    await user.clear(hostInput);
+    await user.type(hostInput, "192.168.1.100");
+    await user.type(portInput, "oops{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请输入 1-65535 之间的端口号");
+    expect(invoke).toHaveBeenCalledWith("connect_adb_endpoint", { host: "192.168.1.100", port: "5555oops" });
+    expect(hostInput).toHaveValue("192.168.1.100");
+    await user.clear(portInput);
+    await user.type(portInput, "5555{Enter}");
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(hostInput).toBeDisabled();
+    expect(portInput).toBeDisabled();
+    expect(screen.getByRole("button", { name: "正在连接…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+    await user.keyboard("{Escape}{Enter}");
+    expect(screen.getByRole("dialog", { name: "手动添加 ADB 设备" })).toBeInTheDocument();
+    expect(attempts).toBe(2);
+    await act(async () => { resolveConnection("192.168.1.100:5555"); });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "手动添加 ADB 设备" })).not.toBeInTheDocument();
+    });
   });
 
   it("hides debug-level entries by default and reveals them via the toggle", async () => {
